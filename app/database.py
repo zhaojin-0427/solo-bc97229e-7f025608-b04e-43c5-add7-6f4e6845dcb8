@@ -1,7 +1,7 @@
 """SQLite 连接与建表。
 
-设计上只追加（append-only）：revisions / attribution_segments 两张表均不做
-UPDATE/DELETE，任一历史修订的可见数据因此永久不变。
+设计上只追加（append-only）：归属修订与层级版本的历史行均不做 UPDATE/DELETE，
+任一历史修订 / 层级版本的可见数据因此永久不变。
 """
 from __future__ import annotations
 
@@ -72,6 +72,38 @@ CREATE INDEX IF NOT EXISTS idx_segments_emp_dates_rev
 
 CREATE INDEX IF NOT EXISTS idx_segments_revision
     ON attribution_segments (revision_id);
+
+-- ---------------------------------------------------------------------------
+-- 成本中心层级（管理账汇总）
+--
+-- 每次成功发布一个「层级版本」，只追加不修改。
+-- 聚合查询固定某一个 hierarchy_version_id：可见 <= 该版本的全部关系，
+-- 同一成本中心同一日期被多个版本声明时按版本号最大者覆盖。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS hierarchy_versions (
+    hierarchy_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    relation_count       INTEGER NOT NULL,
+    note                 TEXT
+);
+
+CREATE TABLE IF NOT EXISTS hierarchy_relations (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    hierarchy_version_id INTEGER NOT NULL REFERENCES hierarchy_versions(hierarchy_version_id),
+    cost_center         TEXT    NOT NULL,  -- 子成本中心
+    parent_cost_center  TEXT,              -- 父成本中心；NULL 表示显式声明为根节点
+    effective_from      TEXT    NOT NULL,  -- ISO yyyy-mm-dd，左闭
+    effective_to        TEXT    NOT NULL,  -- ISO yyyy-mm-dd，右开
+    CHECK (effective_from < effective_to),
+    CHECK (parent_cost_center IS NULL OR cost_center <> parent_cost_center)
+);
+
+-- 按（子节点, 日期区间）定位父级；聚合查询按版本范围读取后取最大版本号
+CREATE INDEX IF NOT EXISTS idx_hierarchy_child_dates
+    ON hierarchy_relations (hierarchy_version_id, cost_center, effective_from, effective_to);
+
+CREATE INDEX IF NOT EXISTS idx_hierarchy_version
+    ON hierarchy_relations (hierarchy_version_id);
 """
 
 
